@@ -1,0 +1,19 @@
+homeX: 0.1
+homeY: 0.1
+homeTh: 0.1
+
+goalXone: 2.0
+goalYone: -4.0
+goalThone: -1.57
+
+goalXtwo: 5.0
+goalYtwo": -2.0
+goalThtwo: 0.1
+
+goalXthree: -3.0
+goalYthree: 5.0
+goalThthree: 3.14
+
+goalXfour: -7.0
+goalYfour: -1.0
+goalThfour: 0.1

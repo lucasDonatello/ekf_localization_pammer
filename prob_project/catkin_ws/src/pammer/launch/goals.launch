@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="pammer" type="goals_node" name="goals_node" output="screen">
+    <rosparam file="$(find pammer)/param/goals_param.yaml" command="load" />
+  </node>
+</launch>

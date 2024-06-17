@@ -1,0 +1,15 @@
+<!-- start.launch -->
+<launch>
+  <arg name="node_start_delay" default="3.0" /> 
+
+  <include file="$(find pammer)/launch/pammer.launch" />
+  
+  <node pkg="pammer" type="ekf_node" name="ekf_node" output="screen" launch-prefix="bash -c 'sleep $(arg node_start_delay); $0 $@'" >
+    <rosparam file="$(find pammer)/param/ekf_param.yaml" command="load" />
+  </node>
+  
+  <node pkg="pammer" type="goals_node" name="goals_node" output="screen">
+    <rosparam file="$(find pammer)/param/goals_param.yaml" command="load" />
+  </node>
+</launch>
+  

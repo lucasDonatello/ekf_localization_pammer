@@ -1,0 +1,5 @@
+<launch>
+    <node pkg="pammer" type="ekf_node" name="ekf_node" output="screen">
+        <rosparam file="$(find pammer)/param/ekf_param.yaml" command="load" />
+    </node>
+</launch>
