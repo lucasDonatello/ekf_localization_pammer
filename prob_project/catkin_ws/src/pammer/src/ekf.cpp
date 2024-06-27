@@ -70,16 +70,20 @@ public:
         double omega = odom_msg->twist.twist.angular.z;
         double dt = odom_msg->header.stamp.toSec() - oldTs;
 
+        tf2::Quaternion quat(
+            odom_msg->pose.pose.orientation.x,
+            odom_msg->pose.pose.orientation.y,
+            odom_msg->pose.pose.orientation.z,
+            odom_msg->pose.pose.orientation.w);
+
+        tf2::Matrix3x3(quat).getRPY(roll, pitch, theta);
+
+        odomCycle(0) = odom_msg->pose.pose.position.x;
+        odomCycle(1) = odom_msg->pose.pose.position.y;
+        odomCycle(2) = normalizeAngle(theta);
+
         if (count == 0)
         {
-            tf2::Quaternion quat(
-                odom_msg->pose.pose.orientation.x,
-                odom_msg->pose.pose.orientation.y,
-                odom_msg->pose.pose.orientation.z,
-                odom_msg->pose.pose.orientation.w);
-
-            tf2::Matrix3x3(quat).getRPY(roll, pitch, theta);
-
             muPrev(0) = odom_msg->pose.pose.position.x;
             muPrev(1) = odom_msg->pose.pose.position.y;
             muPrev(2) = normalizeAngle(theta);
@@ -189,11 +193,12 @@ public:
             double circleY = coefficients_circle->values[1];
             double radius = coefficients_circle->values[2];
 
-            double xWorld = circleX * cos(muPred(2)) - circleY * sin(muPred(2)) + muPred(0);
-            double yWorld = circleX * sin(muPred(2)) + circleY * cos(muPred(2)) + muPred(1);
+            double xWorld = circleX * cos(odomCycle(2)) - circleY * sin(odomCycle(2)) + odomCycle(0);
+            double yWorld = circleX * sin(odomCycle(2)) + circleY * cos(odomCycle(2)) + odomCycle(1);
 
-            double diffX = fabs(fabs(xWorld) - fabs(landmark(0)));
-            double diffY = fabs(fabs(yWorld) - fabs(landmark(1)));
+            double diffX = xWorld - landmark(0);
+            double diffY = yWorld - landmark(1);
+            double diffTotal = std::sqrt(std::pow(diffX, 2) + std::pow(diffY, 2));
 
             double distance = sqrt(circleX * circleX + circleY * circleY);
             double angle = atan2(circleY, circleX);
@@ -201,12 +206,10 @@ public:
             sm(0) = distance;
             sm(1) = angle;
 
-            // ROS_INFO("X: %f, Y: %f, radius: %f", xWorld, yWorld, radius);
-
-            if (diffX <= 2.0 && diffY <= 2.0)
-            {
+            if (diffTotal <= 1.0)
                 detected = true;
-            }
+            else
+                detected = false;
         }
 
         return detected;
@@ -229,24 +232,35 @@ public:
 
         H(0, 0) = delta(0) / std::sqrt(q);
         H(0, 1) = -delta(1) / std::sqrt(q);
-        H(0, 2) = 0.0;
 
         H(1, 0) = delta(1) / q;
         H(1, 1) = -delta(0) / q;
-        H(1, 2) = -1.0;
 
-        H(2, 0) = 0.0;
-        H(2, 1) = 0.0;
-        H(2, 2) = 0.0;
+        sigmaPredShort(0, 0) = sigmaPred(0, 0);
+        sigmaPredShort(0, 1) = sigmaPred(0, 1);
+        sigmaPredShort(1, 0) = sigmaPred(1, 0);
+        sigmaPredShort(1, 1) = sigmaPred(1, 1);
 
-        KgainTemp = H * sigmaPred * H.transpose() + sensorNoise;
-        Kgain = sigmaPred * H.transpose() * KgainTemp.inverse();
+        KgainTemp = H * sigmaPredShort * H.transpose() + sensorNoise;
+        Kgain = sigmaPredShort * H.transpose() * KgainTemp.inverse();
 
-        muCorr = muPred + Kgain * (sm - smPred);
+        muPredShort(0) = muPred(0);
+        muPredShort(1) = muPred(1);
+
+        muCorrShort = muPredShort + Kgain * (sm - smPred);
+        muCorr(0) = muCorrShort(0);
+        muCorr(1) = muCorrShort(1);
         muCorr(2) = normalizeAngle(muPrev(2));
         muPrev = muCorr;
 
-        sigmaCorr = (Identity - Kgain * H) * sigmaPred;
+        sigmaCorrShort = (Identity - Kgain * H) * sigmaPredShort;
+
+        sigmaCorr = sigmaPred;
+
+        sigmaCorr(0, 0) = sigmaCorrShort(0, 0);
+        sigmaCorr(0, 1) = sigmaCorrShort(0, 1);
+        sigmaCorr(1, 0) = sigmaCorrShort(1, 0);
+        sigmaCorr(1, 1) = sigmaCorrShort(1, 1);
 
         sigmaPub[0] = sigmaCorr(0, 0);
         sigmaPub[7] = sigmaCorr(1, 1);
@@ -271,21 +285,6 @@ public:
         }
 
         sigmaPrev = sigmaCorr;
-
-        cout << KgainTemp << endl;
-        cout << "---" << endl;
-        cout << Kgain << endl;
-        cout << "********" << endl;
-
-        // cout << sigmaPred << endl;
-        // cout << "---" << endl;
-        // cout << H << endl;
-        // cout << "---" << endl;
-        // cout << sensorNoise << endl;
-
-        // ROS_INFO("%f - %f = %f", sm(0), smPred(0), sm(0) - smPred(0));
-        // ROS_INFO("%f - %f = %f", sm(1), smPred(1), sm(1) - smPred(1));
-        // ROS_INFO("%f - %f = %f", sm(2), smPred(2), sm(2) - smPred(2));
     }
 
     void publishPose()
@@ -313,16 +312,23 @@ private:
     Eigen::MatrixXd sigmaPred = Eigen::MatrixXd::Zero(3, 3);
     Eigen::MatrixXd sigmaCorr = Eigen::MatrixXd::Zero(3, 3);
     Eigen::MatrixXd processNoise = Eigen::MatrixXd::Identity(3, 3);
-    Eigen::MatrixXd sensorNoise = Eigen::MatrixXd::Identity(3, 3);
+    Eigen::MatrixXd sensorNoise = Eigen::MatrixXd::Identity(2, 2);
 
     Eigen::VectorXd landmark = Eigen::VectorXd::Ones(3);
-    Eigen::VectorXd sm = Eigen::VectorXd::Ones(3);
-    Eigen::VectorXd smPred = Eigen::VectorXd::Ones(3);
+    Eigen::VectorXd sm = Eigen::VectorXd::Ones(2);
+    Eigen::VectorXd smPred = Eigen::VectorXd::Ones(2);
 
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(3, 3);
-    Eigen::MatrixXd Kgain = Eigen::MatrixXd::Zero(3, 3);
-    Eigen::MatrixXd KgainTemp = Eigen::MatrixXd::Zero(3, 3);
-    Eigen::MatrixXd Identity = Eigen::MatrixXd::Identity(3, 3);
+    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd Kgain = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd KgainTemp = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd Identity = Eigen::MatrixXd::Identity(2, 2);
+
+    Eigen::VectorXd odomCycle = Eigen::VectorXd::Zero(3);
+
+    Eigen::MatrixXd sigmaCorrShort = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::MatrixXd sigmaPredShort = Eigen::MatrixXd::Zero(2, 2);
+    Eigen::VectorXd muPredShort = Eigen::VectorXd::Zero(2);
+    Eigen::VectorXd muCorrShort = Eigen::VectorXd::Zero(2);
 
     double sigmaPub[36] = {0.0};
 
@@ -341,7 +347,6 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "ekf_localization_node");
     ros::NodeHandle nh;
     ros::NodeHandle pub;
-
     Filter ekfl(nh, pub);
     ros::spin();
 
