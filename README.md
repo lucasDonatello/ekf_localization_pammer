@@ -1,5 +1,5 @@
 # EKF localization Pammer
-This is an Extended Kalman Filter (EKF) localization implementation with a Turtlebot3 in ROS (Robot Operating System).
+This is an Extended Kalman Filter (EKF) localization implementation with a Turtlebot3 in ROS (Robot Operating System). The repository contains a Ubuntu 20.04 Docker container, with ROS preinstalled. The relevant package for the implementation is "pammer".
 
 ## Launch
 **To run the application, execute the start.launch launchfile** in the pammer package. This will launch: 
