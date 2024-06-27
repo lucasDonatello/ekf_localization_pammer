@@ -5,8 +5,8 @@ This is an Extended Kalman Filter (EKF) localization implementation with a Turtl
 **To run the application, execute the start.launch launchfile** in the pammer package. This will launch: 
 - Turtlebot3 in Gazebo
 - Rviz (with preset configuration)
-- ekf_node
-- goals_node
+- ekf_node (ekf.cpp)
+- goals_node (goals.cpp)
 
 **& roslaunch pammer start.launch**
 
