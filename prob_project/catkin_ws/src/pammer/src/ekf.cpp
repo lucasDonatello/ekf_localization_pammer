@@ -18,6 +18,7 @@
 
 using namespace std;
 
+// function to normalize angle
 double normalizeAngle(double angle)
 {
     while (angle > M_PI)
@@ -32,17 +33,22 @@ class Filter
 public:
     Filter(ros::NodeHandle &nh_, ros::NodeHandle &pub_) : nh(nh_), pub(pub_), odom_sub(nh, "odom", 1), scan_sub(nh, "scan", 1), sync(MySyncPolicy(10), odom_sub, scan_sub)
     {
+        // reads landmark coordinates from ekf_param.yaml
         nh.getParam("/ekf_node/fx", landmark(0));
         nh.getParam("/ekf_node/fy", landmark(1));
 
+        // reads noise values from ekf_param.yaml
         nh.getParam("/ekf_node/processNoise", pN);
         nh.getParam("/ekf_node/sensorNoise", sN);
 
+        // multiplies the noise values with the corresponding diagonal matrices
         processNoise *= pN;
         sensorNoise *= sN;
 
+        // reduces terminal messages
         pcl::console::setVerbosityLevel(pcl::console::L_ALWAYS);
 
+        // starts callback
         sync.registerCallback(boost::bind(&Filter::callback, this, _1, _2));
     }
 
@@ -50,13 +56,17 @@ public:
 
     void callback(const nav_msgs::OdometryConstPtr &odom_msg, const sensor_msgs::LaserScanConstPtr &scan_msg)
     {
+        // predicts pose with odometry data
         predict(odom_msg);
 
+        // checks if circle was detected
         bool detected = detectCircles(scan_msg);
 
+        // calls correction step when circle was detected
         if (detected)
             correct();
 
+        // publishes predicted/corrected pose
         publishPose();
 
         count++;
@@ -66,10 +76,12 @@ public:
     {
         double roll, pitch, theta;
 
+        // reads linear and angular speed from odometry
         double v = odom_msg->twist.twist.linear.x;
         double omega = odom_msg->twist.twist.angular.z;
         double dt = odom_msg->header.stamp.toSec() - oldTs;
 
+        // transforms quaternions to euler angles
         tf2::Quaternion quat(
             odom_msg->pose.pose.orientation.x,
             odom_msg->pose.pose.orientation.y,
@@ -78,10 +90,12 @@ public:
 
         tf2::Matrix3x3(quat).getRPY(roll, pitch, theta);
 
+        // reads coordinates from odometry
         odomCycle(0) = odom_msg->pose.pose.position.x;
         odomCycle(1) = odom_msg->pose.pose.position.y;
         odomCycle(2) = normalizeAngle(theta);
 
+        // initalizes the robot with odometry coordinates for first cycle
         if (count == 0)
         {
             muPrev(0) = odom_msg->pose.pose.position.x;
@@ -91,14 +105,17 @@ public:
         else
             theta = normalizeAngle(muPrev(2));
 
+        // reads timestamp
         oldTs = odom_msg->header.stamp.toSec();
 
         if (fabs(omega) > 0.001)
         {
+            // motion model
             mm(0) = -v / omega * sin(theta) + v / omega * sin(theta + omega * dt);
             mm(1) = v / omega * cos(theta) - v / omega * cos(theta + omega * dt);
             mm(2) = omega * dt;
 
+            // jacobian of motion model
             GPred(0, 0) = 1.0;
             GPred(0, 1) = 0.0;
             GPred(0, 2) = v / omega * cos(theta) - v / omega * cos(theta + omega * dt);
@@ -113,6 +130,7 @@ public:
         }
         else
         {
+            // simplification if omega (w) is too close to 0
             mm(0) = v * dt * cos(theta);
             mm(1) = -v * dt * sin(theta);
             mm(2) = 0.0;
@@ -130,18 +148,22 @@ public:
             GPred(2, 2) = 1.0;
         }
 
+        // prediction calculation setting and setting calculation as old values for next cycle
         muPred = muPrev + mm;
         muPrev = muPred;
         sigmaPred = GPred * sigmaPrev * GPred.transpose() + processNoise;
         sigmaPrev = sigmaPred;
 
+        // stores prediction values for covariance in format for PoseWithCovarianceStamped
         sigmaPub[0] = sigmaPred(0, 0);
         sigmaPub[7] = sigmaPred(1, 1);
         sigmaPub[35] = sigmaPred(2, 2);
 
+        // calculates quaternion from prediction for PoseWithCovarianceStamped
         tf2::Quaternion quaternion;
         quaternion.setRPY(0, 0, muPred(2));
 
+        // writes to PoseWithCovarianceStamped to publish
         pose_msg.header.stamp = ros::Time::now();
         pose_msg.header.frame_id = "map";
         pose_msg.pose.pose.position.x = muPred(0);
@@ -161,6 +183,9 @@ public:
     bool detectCircles(const sensor_msgs::LaserScanConstPtr &scan_msg)
     {
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>());
+
+        // reading LiDAR data (each single point) and storing it in PCL format
+        // only points which are in range of 0 to 5 meters from robot, are considered
         for (size_t i = 0; i < scan_msg->ranges.size(); ++i)
         {
             if (std::isfinite(scan_msg->ranges[i]) && scan_msg->ranges[i] < 5.0)
@@ -174,14 +199,15 @@ public:
             }
         }
 
+        // setup for PCL 2D circle detection
         pcl::ModelCoefficients::Ptr coefficients_circle(new pcl::ModelCoefficients);
         pcl::PointIndices::Ptr inliers_circle(new pcl::PointIndices);
         pcl::SACSegmentation<pcl::PointXYZ> seg;
         seg.setOptimizeCoefficients(true);
         seg.setModelType(pcl::SACMODEL_CIRCLE2D);
-        seg.setMethodType(pcl::SAC_RANSAC);
+        seg.setMethodType(pcl::SAC_RANSAC); //choosing RANSAC
         seg.setDistanceThreshold(0.01);
-        seg.setRadiusLimits(0.28, 0.32);
+        seg.setRadiusLimits(0.28, 0.32); // only considering detected circles with radius in between of 0.28 and 0.32 meters
         seg.setInputCloud(cloud);
         seg.segment(*inliers_circle, *coefficients_circle);
 
@@ -189,23 +215,28 @@ public:
 
         if (inliers_circle->indices.size() > 0)
         {
+            // reading potential landmark from PCL segmentation
             double circleX = coefficients_circle->values[0];
             double circleY = coefficients_circle->values[1];
             double radius = coefficients_circle->values[2];
 
+            // calculating detected circle coordinates in world frame
             double xWorld = circleX * cos(odomCycle(2)) - circleY * sin(odomCycle(2)) + odomCycle(0);
             double yWorld = circleX * sin(odomCycle(2)) + circleY * cos(odomCycle(2)) + odomCycle(1);
 
+            // calculating difference between detected landmark and predefined landmark coordinates
             double diffX = xWorld - landmark(0);
             double diffY = yWorld - landmark(1);
             double diffTotal = std::sqrt(std::pow(diffX, 2) + std::pow(diffY, 2));
 
+            // calculating distance and angle for corrections step
             double distance = sqrt(circleX * circleX + circleY * circleY);
             double angle = atan2(circleY, circleX);
 
             sm(0) = distance;
             sm(1) = angle;
 
+            // checking if it is a potential landmark (within 1 meter of predefined coordinates)
             if (diffTotal <= 1.0)
                 detected = true;
             else
@@ -217,6 +248,8 @@ public:
 
     void correct()
     {
+        // correction step according to Thrun 2005 EKF algorithm with slight changes according to Chen 2012
+        // clarified in paper "EKF Localization for Autonomous Mobile Robots using Multi-Sensor Data Fusion" by Pammer Lucas 2024
         Eigen::Vector2d delta;
         delta(0) = landmark(0) - muPred(0);
         delta(1) = landmark(1) - muPred(1);
@@ -236,6 +269,8 @@ public:
         H(1, 0) = delta(1) / q;
         H(1, 1) = -delta(0) / q;
 
+        // for robustness, 3x3 matrices are reduced to 2x2 for calculation
+        // extracting relevant data
         sigmaPredShort(0, 0) = sigmaPred(0, 0);
         sigmaPredShort(0, 1) = sigmaPred(0, 1);
         sigmaPredShort(1, 0) = sigmaPred(1, 0);
@@ -247,6 +282,7 @@ public:
         muPredShort(0) = muPred(0);
         muPredShort(1) = muPred(1);
 
+        // calculation of correction and converting 2x2 matrices back to 3x3
         muCorrShort = muPredShort + Kgain * (sm - smPred);
         muCorr(0) = muCorrShort(0);
         muCorr(1) = muCorrShort(1);
@@ -262,6 +298,8 @@ public:
         sigmaCorr(1, 0) = sigmaCorrShort(1, 0);
         sigmaCorr(1, 1) = sigmaCorrShort(1, 1);
 
+        // writes to PoseWithCovarianceStamped to publish
+        // if correction is called, pose is overwritten from prediction step
         sigmaPub[0] = sigmaCorr(0, 0);
         sigmaPub[7] = sigmaCorr(1, 1);
         sigmaPub[35] = sigmaCorr(2, 2);
@@ -284,9 +322,11 @@ public:
             pose_msg.pose.covariance[i] = sigmaPub[i];
         }
 
+        // setting calculation to "previous" for next cycle
         sigmaPrev = sigmaCorr;
     }
 
+    // funciton to call pose publication for calculated pose in prediction/correction
     void publishPose()
     {
         pose_pub.publish(pose_msg);
@@ -344,9 +384,12 @@ private:
 
 int main(int argc, char **argv)
 {
+    // ROS initialization
     ros::init(argc, argv, "ekf_localization_node");
     ros::NodeHandle nh;
     ros::NodeHandle pub;
+
+    // creating Filter object
     Filter ekfl(nh, pub);
     ros::spin();
 
