@@ -19,12 +19,14 @@ int main(int argc, char **argv)
 		ROS_INFO("Waiting for the move_base action server to come up");
 	}
 
+	// reads home pose and stores as a goal
 	move_base_msgs::MoveBaseGoal home;
 
 	nh.getParam("/goals_node/homeX", home.target_pose.pose.position.x);
 	nh.getParam("/goals_node/homeY", home.target_pose.pose.position.y);
 	nh.getParam("/goals_node/homeTh", home.target_pose.pose.orientation.w);
 
+	// reads all goals from goals_param.yaml and stores them in a vector
 	move_base_msgs::MoveBaseGoal goal;
 	geometry_msgs::Pose goalAct;
 	std::vector<geometry_msgs::Pose> goals;
@@ -61,10 +63,13 @@ int main(int argc, char **argv)
 	home.target_pose.header.frame_id = "map";
 	home.target_pose.header.stamp = ros::Time::now();
 
+	// moves to home pose
 	ac.sendGoal(home);
 
+	// waits for movement to finish
 	ac.waitForResult();
 
+	
 	if (ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
 	{
 		ROS_INFO("Reached Goal!");
@@ -74,6 +79,7 @@ int main(int argc, char **argv)
 		ROS_INFO("Unable to reach goal!");
 	}
 
+	// reads goals from goal vector and moves robot to active goal sequentially
 	for (int i = 0; i < static_cast<int>(goals.size()); i++)
 	{
 		goal.target_pose.header.frame_id = "map";
